@@ -1,6 +1,6 @@
 """
 🏠 Overview — AlgoTrade AI
-Main landing page: market snapshot + strategy KPIs
+Portfolio snapshot with real price data and strategy KPIs
 """
 
 import streamlit as st
@@ -19,7 +19,6 @@ st.set_page_config(page_title="Overview · AlgoTrade AI",
                    page_icon="📊", layout="wide")
 inject_css()
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     cfg = sidebar_controls()
 
@@ -30,21 +29,22 @@ rf      = cfg["rf"]
 model   = cfg["model"]
 name    = TICKERS[ticker][0]
 
-feat    = get_features(ticker)
+# ── Load real data ────────────────────────────────────────────────────────────
+feat             = get_features(ticker)
 ml_df, ml_trades = run_ml(ticker, model, capital, txn)
 rl_df, rl_trades = run_rl(ticker, capital, txn)
-ml_m = perf_metrics(ml_df["Portfolio"], rf)
-rl_m = perf_metrics(rl_df["Portfolio"], rf)
-bh_m = perf_metrics(ml_df["BuyHold"],   rf)
-last  = feat.iloc[-1]
-prev  = feat.iloc[-2]
-chg   = (last["Close"] - prev["Close"]) / prev["Close"] * 100
+ml_m  = perf_metrics(ml_df["Portfolio"], rf)
+rl_m  = perf_metrics(rl_df["Portfolio"], rf)
+bh_m  = perf_metrics(ml_df["BuyHold"],   rf)
 
-# ── Header ────────────────────────────────────────────────────────────────────
+# ── Live quote from real data (last row) ──────────────────────────────────────
+last = feat.iloc[-1]
+prev = feat.iloc[-2]
+chg  = (last["Close"] - prev["Close"]) / prev["Close"] * 100
+
 page_header("Portfolio", "Overview",
             f"{name}  ·  {ticker}  ·  Capital ${capital:,.0f}")
 
-# ── Top KPI strip ─────────────────────────────────────────────────────────────
 active = ml_m if cfg["engine"] != "RL Agent" else rl_m
 k1,k2,k3,k4,k5,k6 = st.columns(6)
 for col, (label, val) in zip([k1,k2,k3,k4,k5,k6], active.items()):
@@ -52,7 +52,6 @@ for col, (label, val) in zip([k1,k2,k3,k4,k5,k6], active.items()):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Two column layout ─────────────────────────────────────────────────────────
 left, right = st.columns([2.4, 1], gap="large")
 
 with left:
@@ -82,7 +81,8 @@ with right:
     section_label("Live Quote")
     chg_col = GRN if chg >= 0 else RED
     glass_card(f"""
-      <div style="font-family:'Playfair Display',serif;font-size:2.4rem;font-weight:700;color:{chg_col};line-height:1">
+      <div style="font-family:'Playfair Display',serif;font-size:2.4rem;
+                  font-weight:700;color:{chg_col};line-height:1">
         {last['Close']:,.2f}
       </div>
       <div style="font-size:0.78rem;color:{chg_col};margin:0.3rem 0 1rem">
@@ -91,7 +91,7 @@ with right:
       {kv('Open',   f"{last['Open']:,.2f}")}
       {kv('High',   f"{last['High']:,.2f}", GRN)}
       {kv('Low',    f"{last['Low']:,.2f}",  RED)}
-      {kv('Volume', f"{last['Volume']:,}")}
+      {kv('Volume', f"{int(last['Volume']):,}")}
     """)
 
     section_label("Strategy Metrics")
@@ -105,9 +105,12 @@ with right:
                     gap:0;padding:0.42rem 0;border-bottom:1px solid rgba(180,80,20,0.09);
                     font-size:0.75rem;align-items:center">
           <span style="color:{MUTE};font-family:'Outfit',sans-serif">{label}</span>
-          <span style="color:{OR2};font-family:'Playfair Display',serif;font-weight:600;text-align:right">{m_val}</span>
-          <span style="color:{GRN};font-family:'Playfair Display',serif;font-weight:600;text-align:right">{r_val}</span>
-          <span style="color:{CREAM};font-family:'Playfair Display',serif;font-weight:600;text-align:right;opacity:0.55">{b_val}</span>
+          <span style="color:{OR2};font-family:'Playfair Display',serif;
+                       font-weight:600;text-align:right">{m_val}</span>
+          <span style="color:{GRN};font-family:'Playfair Display',serif;
+                       font-weight:600;text-align:right">{r_val}</span>
+          <span style="color:{CREAM};font-family:'Playfair Display',serif;
+                       font-weight:600;text-align:right;opacity:0.55">{b_val}</span>
         </div>"""
     glass_card(f"""
       <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr;gap:0;
@@ -123,7 +126,7 @@ with right:
     """)
 
     section_label("Signal Indicators")
-    rsi = last["RSI"]
+    rsi      = last["RSI"]
     rsi_kind = "red" if rsi > 70 else ("green" if rsi < 30 else "orange")
     rsi_lbl  = "Overbought" if rsi > 70 else ("Oversold" if rsi < 30 else "Neutral")
     macd_kind= "green" if last["MACD"] > last["MACD_Sig"] else "red"
@@ -133,5 +136,6 @@ with right:
       {kv('MACD',     f"{last['MACD']:.3f} &nbsp; {pill(macd_lbl, macd_kind)}")}
       {kv('BB Width', f"{(last['BB_Up']-last['BB_Lo'])/last['BB_Mid']*100:.1f}%")}
       {kv('Ann. Vol', f"{last['Vol_20']*100:.1f}%")}
-      {kv('MA Cross', pill('Golden' if last['MA_50']>last['MA_200'] else 'Death', 'green' if last['MA_50']>last['MA_200'] else 'red'))}
+      {kv('MA Cross', pill('Golden' if last['MA_50']>last['MA_200'] else 'Death',
+                           'green' if last['MA_50']>last['MA_200'] else 'red'))}
     """, small=True)

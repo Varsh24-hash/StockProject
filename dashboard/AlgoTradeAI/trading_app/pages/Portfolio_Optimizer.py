@@ -1,6 +1,6 @@
 """
 💼 Portfolio Optimizer
-Efficient frontier, Sharpe maximisation, correlation matrix
+Efficient frontier and Sharpe maximisation from real returns
 """
 
 import streamlit as st
@@ -23,7 +23,7 @@ with st.sidebar:
 multi = cfg["multi"]
 rf    = cfg["rf"]
 
-# ── Build aligned returns directly (no local cache wrapper) ───────────────────
+# ── Build aligned real returns ────────────────────────────────────────────────
 try:
     frames  = {t: get_price_data(t)["Close"].pct_change().dropna() for t in multi}
     aligned = pd.DataFrame(frames).dropna()
@@ -32,32 +32,23 @@ except Exception as e:
     st.stop()
 
 if aligned.empty or len(aligned) < 30:
-    st.error("Could not align returns for selected stocks. Try a different combination.")
+    st.error("Not enough aligned data. Try a different combination.")
     st.stop()
 
-# ── Run optimisation ──────────────────────────────────────────────────────────
 opt_df = efficient_frontier(tuple(multi), rf=rf)
-
 if opt_df.empty:
-    st.error("Not enough data to compute efficient frontier. Try selecting different stocks.")
+    st.error("Could not compute efficient frontier. Try selecting different stocks.")
     st.stop()
 
 sharpe_idx = opt_df["Sharpe"].idxmax()
 vol_idx    = opt_df["Volatility"].idxmin()
+best       = opt_df.loc[sharpe_idx]
+min_vol    = opt_df.loc[vol_idx]
 
-if pd.isna(sharpe_idx) or pd.isna(vol_idx):
-    st.error("Could not find optimal portfolio. Try selecting different stocks.")
-    st.stop()
-
-best    = opt_df.loc[sharpe_idx]
-min_vol = opt_df.loc[vol_idx]
-
-# ── Page header ───────────────────────────────────────────────────────────────
 page_header("Portfolio", "Optimiser",
             f"Modern Portfolio Theory  ·  {len(multi)} assets  ·  1,000 simulations")
 
-# ── KPIs ──────────────────────────────────────────────────────────────────────
-c1, c2, c3, c4, c5 = st.columns(5)
+c1,c2,c3,c4,c5 = st.columns(5)
 c1.metric("Max Sharpe",         f"{best['Sharpe']:.3f}")
 c2.metric("Optimal Return",     f"{best['Return']:.2f}%")
 c3.metric("Optimal Volatility", f"{best['Volatility']:.2f}%")
@@ -72,43 +63,26 @@ with left:
     section_label("Efficient Frontier")
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=opt_df["Volatility"],
-        y=opt_df["Return"],
-        mode="markers",
-        marker=dict(
-            color=opt_df["Sharpe"],
-            colorscale=[[0, "#1A0A02"], [0.4, GOLD], [0.8, OR], [1.0, OR2]],
-            size=5,
-            opacity=0.75,
-            showscale=True,
-            colorbar=dict(
-                title=dict(text="Sharpe", font=dict(color=MUTE, size=10)),
-                tickfont=dict(color=MUTE, size=9, family="JetBrains Mono"),
-                thickness=10,
-                len=0.8,
-            ),
-        ),
+        x=opt_df["Volatility"], y=opt_df["Return"], mode="markers",
+        marker=dict(color=opt_df["Sharpe"],
+                    colorscale=[[0,"#1A0A02"],[0.4,GOLD],[0.8,OR],[1.0,OR2]],
+                    size=5, opacity=0.75, showscale=True,
+                    colorbar=dict(
+                        title=dict(text="Sharpe", font=dict(color=MUTE, size=10)),
+                        tickfont=dict(color=MUTE, size=9, family="JetBrains Mono"),
+                        thickness=10, len=0.8)),
         name="Portfolios",
-        hovertemplate="Vol: %{x:.2f}%<br>Ret: %{y:.2f}%<extra></extra>",
-    ))
+        hovertemplate="Vol: %{x:.2f}%<br>Ret: %{y:.2f}%<extra></extra>"))
     fig.add_trace(go.Scatter(
-        x=[best["Volatility"]], y=[best["Return"]],
-        mode="markers+text",
-        marker=dict(size=18, color=OR, symbol="star",
-                    line=dict(color=CREAM, width=1.5)),
+        x=[best["Volatility"]], y=[best["Return"]], mode="markers+text",
+        marker=dict(size=18, color=OR, symbol="star", line=dict(color=CREAM, width=1.5)),
         text=["Max Sharpe"], textposition="top right",
-        textfont=dict(color=CREAM, size=10, family="Outfit"),
-        name="Optimal",
-    ))
+        textfont=dict(color=CREAM, size=10, family="Outfit"), name="Optimal"))
     fig.add_trace(go.Scatter(
-        x=[min_vol["Volatility"]], y=[min_vol["Return"]],
-        mode="markers+text",
-        marker=dict(size=14, color=GRN, symbol="diamond",
-                    line=dict(color=CREAM, width=1)),
+        x=[min_vol["Volatility"]], y=[min_vol["Return"]], mode="markers+text",
+        marker=dict(size=14, color=GRN, symbol="diamond", line=dict(color=CREAM, width=1)),
         text=["Min Vol"], textposition="top right",
-        textfont=dict(color=CREAM, size=10, family="Outfit"),
-        name="Min Volatility",
-    ))
+        textfont=dict(color=CREAM, size=10, family="Outfit"), name="Min Volatility"))
     fig.update_layout(**base_layout("", h=420))
     fig.update_xaxes(title_text="Portfolio Volatility (%)", title_font=dict(size=10))
     fig.update_yaxes(title_text="Expected Return (%)",      title_font=dict(size=10))
@@ -117,18 +91,12 @@ with left:
     section_label("Correlation Matrix")
     corr = aligned.corr()
     fig2 = go.Figure(go.Heatmap(
-        z=corr.values,
-        x=list(corr.columns),
-        y=list(corr.columns),
-        colorscale=[[0, "#0A0704"], [0.5, "#5A2808"], [1, OR]],
-        zmid=0,
-        text=np.round(corr.values, 2),
-        texttemplate="%{text}",
+        z=corr.values, x=list(corr.columns), y=list(corr.columns),
+        colorscale=[[0,"#0A0704"],[0.5,"#5A2808"],[1,OR]],
+        zmid=0, text=np.round(corr.values, 2), texttemplate="%{text}",
         textfont=dict(size=10, family="JetBrains Mono", color=CREAM),
         showscale=True,
-        colorbar=dict(thickness=10,
-                      tickfont=dict(color=MUTE, size=9, family="JetBrains Mono")),
-    ))
+        colorbar=dict(thickness=10, tickfont=dict(color=MUTE, size=9, family="JetBrains Mono"))))
     fig2.update_layout(**base_layout("", h=320))
     st.plotly_chart(fig2, use_container_width=True)
 
@@ -141,10 +109,7 @@ with right:
         values=[v * 100 for v in opt_w.values()],
         marker=dict(colors=colors_pie[:len(multi)]),
         textfont=dict(size=11, family="Outfit", color=CREAM),
-        hole=0.50,
-        textinfo="label+percent",
-        insidetextorientation="radial",
-    ))
+        hole=0.50, textinfo="label+percent", insidetextorientation="radial"))
     fig3.update_layout(**base_layout("", h=300))
     fig3.update_layout(showlegend=False)
     st.plotly_chart(fig3, use_container_width=True)
@@ -161,7 +126,6 @@ with right:
     section_label("Individual Stock Returns")
     ind_rets = aligned.mean() * 252 * 100
     ind_vols = aligned.std() * np.sqrt(252) * 100
-
     for t in multi:
         if t not in ind_rets.index:
             continue

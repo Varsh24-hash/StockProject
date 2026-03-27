@@ -1,6 +1,6 @@
 """
 🧠 RL Agent
-Reinforcement Learning trading agent — PPO, training curves, decisions
+Reinforcement Learning trading agent using real price data
 """
 
 import streamlit as st
@@ -31,9 +31,8 @@ metrics    = perf_metrics(df["Portfolio"], rf)
 page_header("Reinforcement", "Learning Agent",
             "Algorithm: PPO  ·  Framework: Stable-Baselines3  ·  Actions: Buy / Sell / Hold")
 
-# ── KPIs ──────────────────────────────────────────────────────────────────────
 c1,c2,c3,c4,c5,c6 = st.columns(6)
-for col,(k,v) in zip([c1,c2,c3,c4,c5,c6], metrics.items()):
+for col, (k, v) in zip([c1,c2,c3,c4,c5,c6], metrics.items()):
     col.metric(k, v)
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -50,10 +49,9 @@ with left:
         line=dict(color=CREAM, width=1.2, dash="dot"), opacity=0.5, name="Buy & Hold"))
 
     if len(trades) > 0:
-        b = trades[trades["Type"]=="BUY"]
-        s = trades[trades["Type"]=="SELL"]
-        # Map trade dates back to portfolio values
         port_by_date = df["Portfolio"].to_dict()
+        b = trades[trades["Type"] == "BUY"]
+        s = trades[trades["Type"] == "SELL"]
         b_vals = [port_by_date.get(d, None) for d in b["Date"]]
         s_vals = [port_by_date.get(d, None) for d in s["Date"]]
         fig.add_trace(go.Scatter(x=b["Date"], y=b_vals, mode="markers",
@@ -65,9 +63,9 @@ with left:
 
     section_label("Training Reward Curve")
     np.random.seed(5)
-    eps = np.arange(1, 201)
-    raw = np.cumsum(np.random.normal(0.9, 4.2, 200))
-    smth= pd.Series(raw).ewm(span=18).mean()
+    eps  = np.arange(1, 201)
+    raw  = np.cumsum(np.random.normal(0.9, 4.2, 200))
+    smth = pd.Series(raw).ewm(span=18).mean()
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(x=eps, y=raw,
         line=dict(color=OR, width=0.5), opacity=0.35, name="Episode reward"))
@@ -92,32 +90,31 @@ with left:
 with right:
     section_label("Agent Configuration")
     glass_card(f"""
-      {kv('Algorithm',   'PPO')}
-      {kv('Framework',   'Stable-Baselines3')}
-      {kv('State dims',  '12')}
-      {kv('Action space','Buy · Sell · Hold')}
-      {kv('Reward',      'Δ Portfolio value')}
-      {kv('Episodes',    '200')}
-      {kv('Timesteps',   '500,000')}
+      {kv('Algorithm',    'PPO')}
+      {kv('Framework',    'Stable-Baselines3')}
+      {kv('State dims',   '12')}
+      {kv('Action space', 'Buy · Sell · Hold')}
+      {kv('Reward',       'Δ Portfolio value')}
+      {kv('Episodes',     '200')}
+      {kv('Timesteps',    '500,000')}
       {kv('Learning rate','3×10⁻⁴')}
-      {kv('Discount γ',  '0.99')}
-      {kv('Clip ε',      '0.2')}
+      {kv('Discount γ',   '0.99')}
+      {kv('Clip ε',       '0.2')}
     """)
 
     section_label("Performance")
     for k, v in metrics.items():
-        col_v = GRN if "+" in str(v) else (RED if k=="Max Drawdown" else CREAM)
+        col_v = GRN if "+" in str(v) else (RED if k == "Max Drawdown" else CREAM)
         glass_card(kv(k, v, col_v), small=True)
 
     if len(trades) > 0:
         section_label("Trade Distribution")
-        counts = trades["Type"].value_counts()
+        counts  = trades["Type"].value_counts()
         fig_pie = go.Figure(go.Pie(
             labels=counts.index, values=counts.values,
             marker=dict(colors=[GRN, RED]),
             hole=0.55,
-            textfont=dict(family="Outfit", size=11, color=CREAM),
-        ))
+            textfont=dict(family="Outfit", size=11, color=CREAM)))
         fig_pie.update_layout(**base_layout("", h=240))
         fig_pie.update_layout(showlegend=True)
         st.plotly_chart(fig_pie, use_container_width=True)

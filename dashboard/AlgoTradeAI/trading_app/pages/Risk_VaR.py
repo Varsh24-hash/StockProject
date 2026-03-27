@@ -1,13 +1,12 @@
 """
 ⚠️ Risk & VaR
-Value at Risk, volatility prediction, return distribution
+Value at Risk from real daily returns, volatility forecasting
 """
 
 import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils import (inject_css, page_header, section_label, glass_card, kv, pill,
@@ -23,22 +22,24 @@ with st.sidebar:
 
 ticker = cfg["ticker"]
 var_c  = cfg["var_c"]
-feat   = get_features(ticker)
-rets   = feat["Return_1d"].dropna()
+
+# ── Real returns from actual OHLCV data ───────────────────────────────────────
+feat = get_features(ticker)
+rets = feat["Return_1d"].dropna()
 
 hist_var  = np.percentile(rets, (1 - var_c) * 100)
 param_var = rets.mean() - 1.645 * rets.std()
 cvar      = rets[rets <= hist_var].mean()
+ann_vol   = rets.std() * np.sqrt(252) * 100
 
 page_header("Risk", "Management",
             f"Value at Risk  ·  {var_c*100:.0f}% Confidence  ·  Volatility Forecasting")
 
-# ── KPI row ───────────────────────────────────────────────────────────────────
 c1,c2,c3,c4 = st.columns(4)
 c1.metric("Historical VaR",  f"{hist_var*100:.3f}%",  "Daily 95% loss limit")
 c2.metric("Parametric VaR",  f"{param_var*100:.3f}%", "Normal distribution")
 c3.metric("CVaR / ES",       f"{cvar*100:.3f}%",      "Expected shortfall")
-c4.metric("Ann. Volatility", f"{rets.std()*np.sqrt(252)*100:.2f}%", "Annualised")
+c4.metric("Ann. Volatility", f"{ann_vol:.2f}%",       "Annualised")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -61,7 +62,8 @@ with top_l:
 
 with top_r:
     section_label("Rolling 60-Day VaR")
-    roll_var = rets.rolling(60).apply(lambda x: np.percentile(x, (1-var_c)*100)) * 100
+    roll_var = rets.rolling(60).apply(
+        lambda x: np.percentile(x, (1-var_c)*100)) * 100
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(x=roll_var.index, y=roll_var,
         fill="tozeroy", fillcolor="rgba(217,95,75,0.09)",
@@ -70,22 +72,21 @@ with top_r:
     fig2.update_layout(**base_layout("", h=340))
     st.plotly_chart(fig2, use_container_width=True)
 
-# ── Volatility ────────────────────────────────────────────────────────────────
+# ── Volatility: realised vs EWMA predicted ────────────────────────────────────
 section_label("Volatility — Realised vs Predicted")
 vol_real = feat["Vol_20"] * 100
-np.random.seed(13)
-vol_pred = vol_real + np.random.normal(0, 0.8, len(vol_real))
-vol_pred = pd.Series(vol_pred.values, index=feat.index)
+# EWMA prediction (lambda=0.94, like RiskMetrics) — no random noise
+vol_pred = rets.ewm(span=20).std() * np.sqrt(252) * 100
 
 fig3 = go.Figure()
 fig3.add_trace(go.Scatter(x=feat.index, y=vol_real,
     line=dict(color=CREAM, width=1.3), opacity=0.8, name="Realised vol (20d)"))
-fig3.add_trace(go.Scatter(x=feat.index, y=vol_pred,
-    line=dict(color=OR2, width=1.5, dash="dot"), name="ML predicted vol"))
+fig3.add_trace(go.Scatter(x=vol_pred.index, y=vol_pred,
+    line=dict(color=OR2, width=1.5, dash="dot"), name="EWMA predicted vol"))
 fig3.update_layout(**base_layout("", h=260))
 st.plotly_chart(fig3, use_container_width=True)
 
-# ── Three VaR types side by side ──────────────────────────────────────────────
+# ── VaR method comparison ─────────────────────────────────────────────────────
 st.markdown("<br>", unsafe_allow_html=True)
 section_label("VaR Method Comparison")
 v1, v2, v3 = st.columns(3, gap="large")
@@ -116,7 +117,7 @@ with v2:
 
 with v3:
     np.random.seed(7)
-    mc_r = np.random.normal(rets.mean(), rets.std(), 50_000)
+    mc_r   = np.random.normal(rets.mean(), rets.std(), 50_000)
     mc_var = np.percentile(mc_r, (1-var_c)*100)
     glass_card(f"""
       <div class="section-label" style="margin-bottom:0.8rem">Monte Carlo VaR</div>
