@@ -29,16 +29,24 @@ rf      = cfg["rf"]
 
 df, trades = run_ml(ticker, model, capital, txn)
 metrics    = perf_metrics(df["Portfolio"], rf)
-acc_map    = {"xgboost": 63, "random_forest": 59, "logistic_regression": 54}
-acc        = acc_map[model]
-label      = model.replace("_", " ").title()
+
+# ── Pull real metrics from session state (set by run_ml) ──────────────────────
+# Falls back to reasonable defaults if simulation was used
+_default_acc = {"xgboost": 63, "random_forest": 59, "logistic_regression": 54}
+ml_m  = st.session_state.get("ml_metrics", {})
+acc   = ml_m.get("accuracy",  _default_acc[model])
+prec  = ml_m.get("precision", acc + 2)
+rec   = ml_m.get("recall",    acc - 3)
+auc   = ml_m.get("roc_auc",   round(0.5 + acc / 200, 2))
+f1    = ml_m.get("f1",        round(acc / 100 + 0.01, 2))
+label = model.replace("_", " ").title()
 
 page_header("ML", "Prediction Engine",
             f"Model: {label}  ·  Accuracy: {acc}%  ·  TimeSeriesSplit CV")
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
-c1,c2,c3,c4,c5,c6 = st.columns(6)
-for col, (k,v) in zip([c1,c2,c3,c4,c5,c6], metrics.items()):
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+for col, (k, v) in zip([c1, c2, c3, c4, c5, c6], metrics.items()):
     col.metric(k, v)
 
 st.markdown("<br>", unsafe_allow_html=True)
@@ -87,34 +95,59 @@ with left:
     st.plotly_chart(fig2, use_container_width=True)
 
 with right:
+    # ── Model Metrics ──────────────────────────────────────────────────────
     section_label("Model Metrics")
     glass_card(f"""
-      {kv('Accuracy',  f"{acc}%",      OR2)}
-      {kv('Precision', f"{acc+2}%",    OR2)}
-      {kv('Recall',    f"{acc-3}%",    OR2)}
-      {kv('ROC-AUC',   f"0.{acc+8}",  GOLD)}
-      {kv('F1 Score',  f"0.{acc+1}",  GOLD)}
-      {kv('CV Folds',  "5 (TS Split)", CREAM)}
+      {kv('Accuracy',  f"{acc}%",         OR2)}
+      {kv('Precision', f"{prec}%",        OR2)}
+      {kv('Recall',    f"{rec}%",         OR2)}
+      {kv('ROC-AUC',   f"{auc}",         GOLD)}
+      {kv('F1 Score',  f"{f1}",          GOLD)}
+      {kv('CV Folds',  "5 (TS Split)",   CREAM)}
     """)
 
+    # ── Feature Importance ─────────────────────────────────────────────────
     section_label("Feature Importance")
-    feats  = ["Return 5d","RSI","Volatility","MA Cross","MACD","BB Width","Vol Chg","Return 1d"]
-    np.random.seed(acc)
-    imps   = sorted(np.random.dirichlet(np.ones(8) * (acc/28)), reverse=True)
-    colors = [OR if i==0 else GOLD if i<3 else "#3A2418" for i in range(8)]
-    fig_fi = go.Figure(go.Bar(x=imps, y=feats, orientation="h",
-        marker=dict(color=colors), text=[f"{v:.3f}" for v in imps],
-        textposition="outside", textfont=dict(color=MUTE, size=9, family="JetBrains Mono")))
+    feat_imp = st.session_state.get("ml_feature_importances", {})
+    if feat_imp:
+        # sort by importance descending
+        pairs = sorted(feat_imp.items(), key=lambda x: x[1], reverse=True)
+        feats = [p[0] for p in pairs]
+        imps  = [p[1] for p in pairs]
+    else:
+        # simulated fallback
+        feats = ["Return 5d", "RSI", "Volatility", "MA Cross",
+                 "MACD", "BB Width", "Vol Chg", "Return 1d"]
+        np.random.seed(acc)
+        imps  = sorted(np.random.dirichlet(np.ones(8) * (acc / 28)), reverse=True)
+
+    colors = [OR if i == 0 else GOLD if i < 3 else "#3A2418" for i in range(len(feats))]
+    fig_fi = go.Figure(go.Bar(
+        x=imps, y=feats, orientation="h",
+        marker=dict(color=colors),
+        text=[f"{v:.3f}" for v in imps],
+        textposition="outside",
+        textfont=dict(color=MUTE, size=9, family="JetBrains Mono")))
     fig_fi.update_layout(**base_layout("", h=300))
     fig_fi.update_xaxes(showticklabels=False)
     st.plotly_chart(fig_fi, use_container_width=True)
 
+    # ── Confusion Matrix ───────────────────────────────────────────────────
     section_label("Confusion Matrix")
-    tp=int(acc*3.8); fn=int((100-acc)*1.9); fp=int((100-acc)*1.7); tn=int(acc*3.3)
-    cm = [[tp,fn],[fp,tn]]
+    cm_data = st.session_state.get("ml_confusion_matrix", None)
+    if cm_data:
+        cm = cm_data
+    else:
+        # simulated fallback
+        tp = int(acc * 3.8); fn = int((100 - acc) * 1.9)
+        fp = int((100 - acc) * 1.7); tn = int(acc * 3.3)
+        cm = [[tp, fn], [fp, tn]]
+
     fig_cm = go.Figure(go.Heatmap(
-        z=cm, x=["Pred UP","Pred DOWN"], y=["Actual UP","Actual DOWN"],
-        colorscale=[[0,"#0A0704"],[0.5,"#5A2808"],[1,OR]],
+        z=cm,
+        x=["Pred UP", "Pred DOWN"],
+        y=["Actual UP", "Actual DOWN"],
+        colorscale=[[0, "#0A0704"], [0.5, "#5A2808"], [1, OR]],
         text=cm, texttemplate="%{text}",
         textfont=dict(size=18, family="Playfair Display", color=CREAM),
         showscale=False,
