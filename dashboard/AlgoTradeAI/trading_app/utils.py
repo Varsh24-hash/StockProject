@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+import os
 
 # ── Palette ──────────────────────────────────────────────────────────────────
 OR   = "#D4621A"   # primary orange
@@ -405,10 +406,10 @@ def get_price_data(ticker: str, n_days: int = 756) -> pd.DataFrame:
     r[3*n_days//4 : 3*n_days//4+40] += 0.0015
     price = start * np.exp(np.cumsum(r))
     end = pd.Timestamp.today().normalize()
-    if end.weekday() == 5:    # Saturday → Friday
-      end -= pd.Timedelta(days=1)
-    elif end.weekday() == 6:  # Sunday → Friday
-      end -= pd.Timedelta(days=2)
+    if end.weekday() == 5:
+        end -= pd.Timedelta(days=1)
+    elif end.weekday() == 6:
+        end -= pd.Timedelta(days=2)
     dates = pd.date_range(end=end, periods=n_days, freq="B")
     hi  = price * (1 + np.abs(np.random.normal(0, 0.007, n_days)))
     lo  = price * (1 - np.abs(np.random.normal(0, 0.007, n_days)))
@@ -443,9 +444,115 @@ def get_features(ticker: str) -> pd.DataFrame:
     return df.dropna()
 
 
+# ── Real ML runner ────────────────────────────────────────────────────────────
 @st.cache_data
 def run_ml(ticker: str, model: str, capital: float, txn: float):
-    df = get_features(ticker).copy()
+    import joblib
+    from sklearn.metrics import (accuracy_score, precision_score,
+                                 recall_score, roc_auc_score, f1_score,
+                                 confusion_matrix)
+
+    # resolve project root (3 levels up from utils.py inside dashboard/AlgoTradeAI/trading_app/)
+    root          = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    processed_dir = os.path.join(root, "data", "processed")
+    models_dir    = os.path.join(root, "models")
+
+    model_file_map = {
+        "xgboost":             "xgb_model.pkl",
+        "random_forest":       "random_forest_model.pkl",
+        "logistic_regression": "logistic_model.pkl",
+    }
+
+    csv_path   = os.path.join(processed_dir, f"{ticker}_features.csv")
+    model_path = os.path.join(models_dir, model_file_map.get(model, "xgb_model.pkl"))
+
+    # ── Fallback to simulation if files are missing ────────────────────────
+    if not os.path.exists(csv_path) or not os.path.exists(model_path):
+        return _run_ml_simulated(ticker, model, capital, txn)
+
+    raw = pd.read_csv(csv_path, parse_dates=["Date"], index_col="Date").dropna()
+
+    feature_cols = ["return_1d", "MA_10", "MA_50", "volatility", "volume_change", "RSI"]
+    missing = [c for c in feature_cols + ["Close", "target"] if c not in raw.columns]
+    if missing:
+        return _run_ml_simulated(ticker, model, capital, txn)
+
+    clf = joblib.load(model_path)
+
+    X = raw[feature_cols]
+    y = raw["target"]
+
+    # ── Predict on full dataset ────────────────────────────────────────────
+    prob_up = clf.predict_proba(X)[:, 1]
+    signals = (prob_up > 0.5).astype(int)   # 1 = BUY, 0 = SELL/HOLD
+
+    df = raw.copy()
+    df["Signal"] = signals
+    df["Prob"]   = prob_up
+
+    # ── Simulate portfolio from real signals ───────────────────────────────
+    cash, shares = capital, 0
+    port, trades = [], []
+    for i in range(len(df) - 1):
+        p = df["Close"].iloc[i]
+        s = df["Signal"].iloc[i]
+        if s == 1 and shares == 0:
+            shares = int(cash * 0.95 / (p * (1 + txn)))
+            cash  -= shares * p * (1 + txn)
+            trades.append({"Date": df.index[i], "Type": "BUY",
+                           "Price": round(p, 2), "Shares": shares})
+        elif s == 0 and shares > 0:
+            cash  += shares * p * (1 - txn)
+            trades.append({"Date": df.index[i], "Type": "SELL",
+                           "Price": round(p, 2), "Shares": shares})
+            shares = 0
+        port.append(cash + shares * p)
+
+    df = df.iloc[:-1].copy()
+    df["Portfolio"] = port
+    df["BuyHold"]   = capital * df["Close"] / df["Close"].iloc[0]
+
+    # ── Real model evaluation on test split ───────────────────────────────
+    split  = int(len(raw) * 0.8)
+    X_test = X.iloc[split:]
+    y_test = y.iloc[split:]
+    y_pred = clf.predict(X_test)
+    y_prob = clf.predict_proba(X_test)[:, 1]
+
+    real_acc  = round(accuracy_score(y_test, y_pred) * 100)
+    real_prec = round(precision_score(y_test, y_pred, zero_division=0) * 100)
+    real_rec  = round(recall_score(y_test, y_pred, zero_division=0) * 100)
+    real_auc  = round(roc_auc_score(y_test, y_prob), 2)
+    real_f1   = round(f1_score(y_test, y_pred, zero_division=0), 2)
+
+    st.session_state["ml_metrics"] = {
+        "accuracy":  real_acc,
+        "precision": real_prec,
+        "recall":    real_rec,
+        "roc_auc":   real_auc,
+        "f1":        real_f1,
+    }
+
+    # Feature importances
+    if hasattr(clf, "feature_importances_"):
+        importances = clf.feature_importances_
+    elif hasattr(clf, "coef_"):
+        importances = np.abs(clf.coef_[0])
+        importances = importances / importances.sum()
+    else:
+        importances = np.ones(len(feature_cols)) / len(feature_cols)
+    st.session_state["ml_feature_importances"] = dict(zip(feature_cols, importances))
+
+    # Confusion matrix
+    cm = confusion_matrix(y_test, y_pred)
+    st.session_state["ml_confusion_matrix"] = cm.tolist()
+
+    return df, pd.DataFrame(trades)
+
+
+def _run_ml_simulated(ticker: str, model: str, capital: float, txn: float):
+    """Simulated fallback used when real model / processed CSV is not available."""
+    df  = get_features(ticker).copy()
     acc = {"xgboost": 0.63, "random_forest": 0.59, "logistic_regression": 0.54}[model]
     np.random.seed(42)
     true_dir = (df["Close"].shift(-1) > df["Close"]).astype(int)
@@ -463,11 +570,11 @@ def run_ml(ticker: str, model: str, capital: float, txn: float):
             shares = int(cash * 0.95 / (p * (1 + txn)))
             cash  -= shares * p * (1 + txn)
             trades.append({"Date": df.index[i], "Type": "BUY",
-                            "Price": round(p, 2), "Shares": shares})
+                           "Price": round(p, 2), "Shares": shares})
         elif s == 0 and shares > 0:
             cash  += shares * p * (1 - txn)
             trades.append({"Date": df.index[i], "Type": "SELL",
-                            "Price": round(p, 2), "Shares": shares})
+                           "Price": round(p, 2), "Shares": shares})
             shares = 0
         port.append(cash + shares * p)
     df = df.iloc[:-1].copy()
@@ -491,11 +598,11 @@ def run_rl(ticker: str, capital: float, txn: float):
             shares = int(cash * 0.95 / (p * (1 + txn)))
             cash  -= shares * p * (1 + txn)
             trades.append({"Date": df.index[i], "Type": "BUY",
-                            "Price": round(p, 2), "Shares": shares})
+                           "Price": round(p, 2), "Shares": shares})
         elif s == 0 and shares > 0:
             cash  += shares * p * (1 - txn)
             trades.append({"Date": df.index[i], "Type": "SELL",
-                            "Price": round(p, 2), "Shares": shares})
+                           "Price": round(p, 2), "Shares": shares})
             shares = 0
         port.append(cash + shares * p)
     df = df.iloc[:-1].copy()
@@ -589,7 +696,6 @@ def sidebar_controls():
     show_ma  = st.checkbox("Moving Averages", True)
     show_vol = st.checkbox("Volume",          True)
 
-    # ── Run Simulation button ─────────────────────────────────────────────────
     st.markdown("---")
     st.markdown('<div class="sidebar-section">Simulation</div>', unsafe_allow_html=True)
     st.markdown('<div class="run-btn">', unsafe_allow_html=True)
