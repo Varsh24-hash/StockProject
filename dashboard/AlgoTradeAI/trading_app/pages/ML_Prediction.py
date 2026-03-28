@@ -1,6 +1,6 @@
 """
-🤖 ML Prediction
-Supervised ML trading signals, model evaluation, feature importance
+🤖 ML Prediction Engine
+Shows ML model results. If engine = RL Agent, shows a notice.
 """
 
 import streamlit as st
@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils import (inject_css, page_header, section_label, glass_card, kv, pill,
-                   base_layout, TICKERS, get_features, run_ml, perf_metrics,
+                   base_layout, TICKERS, run_engine, perf_metrics,
                    sidebar_controls, OR, OR2, GOLD, CREAM, MUTE, GRN, RED)
 
 st.set_page_config(page_title="ML Prediction · AlgoTrade AI",
@@ -21,23 +21,32 @@ inject_css()
 with st.sidebar:
     cfg = sidebar_controls()
 
-ticker  = cfg["ticker"]
-model   = cfg["model"]
-capital = cfg["capital"]
-txn     = cfg["txn"]
-rf      = cfg["rf"]
+engine = cfg["engine"]
+rf     = cfg["rf"]
 
-df, trades = run_ml(ticker, model, capital, txn)
-metrics    = perf_metrics(df["Portfolio"], rf)
+# ── If pure RL mode, show notice ──────────────────────────────────────────────
+if engine == "RL Agent":
+    page_header("ML", "Prediction Engine", "Engine set to RL Agent")
+    st.info("⚠️ ML Prediction is disabled — you selected **RL Agent** in the sidebar. "
+            "Switch to **ML Prediction** or **Both** to see ML results here.")
+    st.stop()
 
-_default_acc = {"xgboost": 63, "random_forest": 59, "logistic_regression": 54}
-ml_m  = st.session_state.get("ml_metrics", {})
-acc   = ml_m.get("accuracy",  _default_acc[model])
-prec  = ml_m.get("precision", acc + 2)
-rec   = ml_m.get("recall",    acc - 3)
-auc   = ml_m.get("roc_auc",   round(0.5 + acc / 200, 2))
-f1    = ml_m.get("f1",        round(acc / 100 + 0.01, 2))
-label = model.replace("_", " ").title()
+# ── Run ML engine ─────────────────────────────────────────────────────────────
+result = run_engine(cfg)
+df     = result["ml_df"]
+trades = result["ml_trades"]
+model  = cfg["model"]
+label  = result["model_label"]
+metrics = perf_metrics(df["Portfolio"], rf)
+
+# ── Pull real model metrics from session state ────────────────────────────────
+_def = {"xgboost": 63, "random_forest": 59, "logistic_regression": 54}
+ml_m = st.session_state.get("ml_metrics", {})
+acc  = ml_m.get("accuracy",  _def[model])
+prec = ml_m.get("precision", acc + 2)
+rec  = ml_m.get("recall",    acc - 3)
+auc  = ml_m.get("roc_auc",   round(0.5 + acc/200, 2))
+f1   = ml_m.get("f1",        round(acc/100 + 0.01, 2))
 
 page_header("ML", "Prediction Engine",
             f"Model: {label}  ·  Accuracy: {acc}%  ·  TimeSeriesSplit CV")
@@ -106,7 +115,7 @@ with right:
     else:
         feats = ["Return 5d","RSI","Volatility","MA Cross","MACD","BB Width","Vol Chg","Return 1d"]
         np.random.seed(acc)
-        imps  = sorted(np.random.dirichlet(np.ones(8) * (acc/28)), reverse=True)
+        imps  = sorted(np.random.dirichlet(np.ones(8)*(acc/28)), reverse=True)
 
     colors = [OR if i==0 else GOLD if i<3 else "#3A2418" for i in range(len(feats))]
     fig_fi = go.Figure(go.Bar(x=imps, y=feats, orientation="h",

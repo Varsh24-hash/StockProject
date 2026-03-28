@@ -1,6 +1,6 @@
 """
 🧠 RL Agent
-Reinforcement Learning trading agent using real price data
+Shows RL results. If engine = ML Prediction only, shows a notice.
 """
 
 import streamlit as st
@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils import (inject_css, page_header, section_label, glass_card, kv, pill,
-                   base_layout, TICKERS, get_features, run_rl, perf_metrics,
+                   base_layout, TICKERS, run_engine, perf_metrics,
                    sidebar_controls, OR, OR2, GOLD, CREAM, MUTE, GRN, RED)
 
 st.set_page_config(page_title="RL Agent · AlgoTrade AI",
@@ -20,13 +20,20 @@ inject_css()
 with st.sidebar:
     cfg = sidebar_controls()
 
-ticker  = cfg["ticker"]
-capital = cfg["capital"]
-txn     = cfg["txn"]
-rf      = cfg["rf"]
+engine = cfg["engine"]
+rf     = cfg["rf"]
 
-df, trades = run_rl(ticker, capital, txn)
-metrics    = perf_metrics(df["Portfolio"], rf)
+# ── If pure ML mode, show notice ──────────────────────────────────────────────
+if engine == "ML Prediction":
+    page_header("Reinforcement", "Learning Agent", "Engine set to ML Prediction")
+    st.info("⚠️ RL Agent is disabled — you selected **ML Prediction** in the sidebar. "
+            "Switch to **RL Agent** or **Both** to see RL results here.")
+    st.stop()
+
+result  = run_engine(cfg)
+df      = result["rl_df"]
+trades  = result["rl_trades"]
+metrics = perf_metrics(df["Portfolio"], rf)
 
 page_header("Reinforcement", "Learning Agent",
             "Algorithm: PPO  ·  Framework: Stable-Baselines3  ·  Actions: Buy / Sell / Hold")
@@ -52,12 +59,12 @@ with left:
         port_by_date = df["Portfolio"].to_dict()
         b = trades[trades["Type"] == "BUY"]
         s = trades[trades["Type"] == "SELL"]
-        b_vals = [port_by_date.get(d, None) for d in b["Date"]]
-        s_vals = [port_by_date.get(d, None) for d in s["Date"]]
-        fig.add_trace(go.Scatter(x=b["Date"], y=b_vals, mode="markers",
-            marker=dict(symbol="triangle-up", size=10, color=GRN), name="Buy"))
-        fig.add_trace(go.Scatter(x=s["Date"], y=s_vals, mode="markers",
-            marker=dict(symbol="triangle-down", size=10, color=RED), name="Sell"))
+        fig.add_trace(go.Scatter(x=b["Date"],
+            y=[port_by_date.get(d, None) for d in b["Date"]],
+            mode="markers", marker=dict(symbol="triangle-up", size=10, color=GRN), name="Buy"))
+        fig.add_trace(go.Scatter(x=s["Date"],
+            y=[port_by_date.get(d, None) for d in s["Date"]],
+            mode="markers", marker=dict(symbol="triangle-down", size=10, color=RED), name="Sell"))
     fig.update_layout(**base_layout("", h=380))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -76,7 +83,7 @@ with left:
 
     section_label("Rolling Portfolio Returns")
     roll_ret = df["Portfolio"].pct_change().rolling(20).mean() * 100
-    bh_ret   = df["BuyHold"].pct_change().rolling(20).mean() * 100
+    bh_ret   = df["BuyHold"].pct_change().rolling(20).mean()   * 100
     fig3 = go.Figure()
     fig3.add_trace(go.Scatter(x=df.index, y=roll_ret,
         fill="tozeroy", fillcolor="rgba(212,98,26,0.07)",
@@ -112,8 +119,7 @@ with right:
         counts  = trades["Type"].value_counts()
         fig_pie = go.Figure(go.Pie(
             labels=counts.index, values=counts.values,
-            marker=dict(colors=[GRN, RED]),
-            hole=0.55,
+            marker=dict(colors=[GRN, RED]), hole=0.55,
             textfont=dict(family="Outfit", size=11, color=CREAM)))
         fig_pie.update_layout(**base_layout("", h=240))
         fig_pie.update_layout(showlegend=True)
